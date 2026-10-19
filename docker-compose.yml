@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # Service 1: PostgreSQL 16 (Multi-tenant: application DB + n8n DB)
+  # ==============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: loan_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_master_password
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init/01-init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ./database/seeds/seed_demo_products.sql:/docker-entrypoint-initdb.d/seed_demo_products.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - loan_network
+
+  # ==============================================================================
+  # Service 2: Self-hosted n8n Orchestrator (Pinned Stable Release)
+  # ==============================================================================
+  n8n:
+    image: n8nio/n8n:1.44.0
+    container_name: loan_n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n_db
+      - DB_POSTGRESDB_USER=n8n_user
+      - DB_POSTGRESDB_PASSWORD=n8n_secure_password
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-admin_secure_password}
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+      - DELIVERY_MODE=test
+      - TEST_EMAIL_RECIPIENTS=${TEST_EMAIL_RECIPIENTS:-developer-test-inbox@example.com}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+      - ./n8n/fixtures:/fixtures:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - loan_network
+
+  # ==============================================================================
+  # Service 3: FastAPI Backend Application
+  # ==============================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: loan_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=local
+      - DATABASE_URL=postgresql://loan_app_user:loan_app_password@postgres:5432/loan_engine
+      - DELIVERY_MODE=test
+      - ALLOW_REAL_RECIPIENTS=false
+      - TEST_EMAIL_RECIPIENTS=${TEST_EMAIL_RECIPIENTS:-developer-test-inbox@example.com}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-replace-with-a-secure-random-64-char-token}
+      - N8N_MATCHING_WEBHOOK_URL=http://n8n:5678/webhook/user-loan-matching
+      - N8N_NOTIFICATION_WEBHOOK_URL=http://n8n:5678/webhook/user-notification
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - loan_network
+
+networks:
+  loan_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  n8n_data:
