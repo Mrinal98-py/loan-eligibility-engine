@@ -1,0 +1,65 @@
+name: CI Test Suite
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_password
+          POSTGRES_DB: loan_engine_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Apply schema and seed products to PostgreSQL
+        env:
+          PGPASSWORD: postgres_password
+        run: |
+          psql -h localhost -U postgres -d loan_engine_test -f database/schema.sql
+          psql -h localhost -U postgres -d loan_engine_test -f database/seeds/seed_demo_products.sql
+
+      - name: Validate n8n Workflows
+        run: |
+          python scripts/validate_workflows.py
+
+      - name: Run Pytest Suite
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres_password@localhost:5432/loan_engine_test
+          DATABASE_URL: postgresql://postgres:postgres_password@localhost:5432/loan_engine_test
+          ENVIRONMENT: test
+          DELIVERY_MODE: test
+          ALLOW_REAL_RECIPIENTS: "false"
+          TEST_EMAIL_RECIPIENTS: "ci-test@example.com"
+          AWS_REGION: "us-east-1"
+          AWS_ACCESS_KEY_ID: "mock_access_key"
+          AWS_SECRET_ACCESS_KEY: "mock_secret_key"
+        run: |
+          pytest tests/ -v
