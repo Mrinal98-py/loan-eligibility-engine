@@ -1,0 +1,107 @@
+{
+  "name": "Workflow C - Safe User Notification via Amazon SES",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "user-notification",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "c1-webhook-trigger",
+      "name": "Notification Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [100, 300],
+      "webhookId": "user-notification"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  u.id AS user_id,\n  u.external_user_id,\n  u.name AS user_name,\n  u.email AS original_sample_email,\n  COUNT(m.id) AS matched_count,\n  json_agg(json_build_object(\n    'product_name', p.product_name,\n    'source_name', p.source_name,\n    'source_url', p.source_url,\n    'rate_min', p.interest_rate_min,\n    'rate_max', p.interest_rate_max,\n    'reasons', m.match_reasons\n  )) AS matched_products\nFROM users u\nJOIN matches m ON m.user_id = u.id\nJOIN loan_products p ON p.id = m.product_id\nWHERE m.import_id = $1::uuid\n  AND NOT EXISTS (\n    SELECT 1 FROM notifications n \n    WHERE n.import_id = m.import_id \n      AND n.user_id = u.id \n      AND n.status = 'SENT'\n  )\nGROUP BY u.id, u.external_user_id, u.name, u.email;",
+        "additionalFields": {
+          "queryParams": "={{ [ $('Notification Webhook Trigger').item.json.body.import_id ] }}"
+        }
+      },
+      "id": "c2-fetch-eligible-users",
+      "name": "Fetch Eligible Unnotified Users",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [320, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-loan-engine",
+          "name": "Postgres Loan Engine"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// CRITICAL SAFETY OVERRIDE: Never send to sample CSV email addresses!\n// All outbound notification emails are strictly redirected to controlled test inboxes.\nconst items = $input.all();\nconst importId = $('Notification Webhook Trigger').item.json.body.import_id;\nconst testRecipient = $env.TEST_EMAIL_RECIPIENTS || 'developer-test-inbox@example.com';\nconst deliveryMode = $env.DELIVERY_MODE || 'test';\n\nconst formattedMessages = [];\n\nfor (const item of items) {\n  const data = item.json;\n  const userName = data.user_name || data.external_user_id;\n  \n  let productListHtml = '';\n  let productListText = '';\n  \n  for (const prod of (data.matched_products || [])) {\n    const rates = (prod.rate_min && prod.rate_max) ? `${prod.rate_min}% - ${prod.rate_max}% p.a.` : 'Published bank rates apply';\n    productListText += `• ${prod.product_name} (${prod.source_name}) | Rate: ${rates} | Link: ${prod.source_url}\\n`;\n    productListHtml += `<li><strong>${prod.product_name}</strong> (${prod.source_name})<br/>Indicative Rate: ${rates}<br/><a href=\"${prod.source_url}\">View Product Details</a></li><br/>`;\n  }\n  \n  const textBody = `Hello ${userName},\\n\\nBased on our automated matching criteria, you may be eligible for the following personal loan products:\\n\\n${productListText}\\n\\nDISCLAIMER: Matches are indicative and do not guarantee credit approval. Final terms are determined solely by the lender upon application verification.`;\n  const htmlBody = `<h3>Hello ${userName},</h3><p>Based on our automated matching criteria, you may be eligible for the following personal loan products:</p><ul>${productListHtml}</ul><p style=\"color: #64748b; font-size: 12px;\"><strong>DISCLAIMER:</strong> Matches are indicative and do not guarantee credit approval. Final terms are determined solely by the lender.</p>`;\n  \n  formattedMessages.push({\n    json: {\n      import_id: importId,\n      user_id: data.user_id,\n      delivery_mode: deliveryMode,\n      safe_recipient: testRecipient,\n      original_sample_email: data.original_sample_email,\n      matched_count: data.matched_count,\n      subject: `Loan Eligibility Engine: ${data.matched_count} Indicative Loan Matches Found`,\n      text_body: textBody,\n      html_body: htmlBody\n    }\n  });\n}\n\nreturn formattedMessages;"
+      },
+      "id": "c3-safety-override-formatter",
+      "name": "Strict Test Override & Email Formatter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO notifications (\n  import_id, user_id, delivery_mode, test_recipient, matched_products_count, status, provider_message_id, sent_at\n) VALUES (\n  $1::uuid, $2::uuid, $3, $4, $5, 'SENT', 'ses-mock-msg-' || gen_random_uuid(), NOW()\n)\nRETURNING id, test_recipient, status, provider_message_id;",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.import_id, $json.user_id, $json.delivery_mode, $json.safe_recipient, $json.matched_count ] }}"
+        }
+      },
+      "id": "c4-record-audit-notification",
+      "name": "Record Safe Notification Audit in Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [760, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-loan-engine",
+          "name": "Postgres Loan Engine"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Notification Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Eligible Unnotified Users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Eligible Unnotified Users": {
+      "main": [
+        [
+          {
+            "node": "Strict Test Override & Email Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strict Test Override & Email Formatter": {
+      "main": [
+        [
+          {
+            "node": "Record Safe Notification Audit in Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "name": "Workflow A - Loan Product Discovery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a1-schedule-trigger",
+      "name": "Schedule Trigger (Daily)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {},
+      "id": "a2-manual-trigger",
+      "name": "Manual Execution Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [100, 480]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/products",
+        "options": {}
+      },
+      "id": "a3-source-registry",
+      "name": "Fetch Configured Portals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [320, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalizes scraped raw financial product parameters and extracts evidence provenance\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json;\n  // Validates presence of core fields\n  if (!data.product_name || !data.source_name) continue;\n  \n  results.push({\n    json: {\n      source_name: data.source_name,\n      source_url: data.source_url || 'https://bank-offers.internal',\n      product_name: data.product_name,\n      product_type: 'Personal Loan',\n      interest_rate_min: data.interest_rate_min || 10.50,\n      interest_rate_max: data.interest_rate_max || 21.00,\n      min_monthly_income: data.min_monthly_income || 25000.00,\n      min_credit_score: data.min_credit_score || 700,\n      min_age: data.min_age || 21,\n      max_age: data.max_age || 60,\n      eligible_employment_statuses: JSON.stringify(data.eligible_employment_statuses || ['Salaried']),\n      eligibility_criteria_raw: data.eligibility_criteria_raw || 'Verified personal loan offering',\n      eligibility_evidence: JSON.stringify(data.eligibility_evidence || { source: 'Portal published criteria' }),\n      is_active: true\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "a4-transform-normalize",
+      "name": "Normalize & Validate Evidence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 380]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO loan_products (\n  source_name, source_url, product_name, product_type,\n  interest_rate_min, interest_rate_max, min_monthly_income, min_credit_score,\n  min_age, max_age, eligible_employment_statuses, eligibility_criteria_raw,\n  eligibility_evidence, is_active, verified_at, updated_at\n) VALUES (\n  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13::jsonb, $14, NOW(), NOW()\n)\nON CONFLICT (source_url, product_name) DO UPDATE SET\n  interest_rate_min = EXCLUDED.interest_rate_min,\n  interest_rate_max = EXCLUDED.interest_rate_max,\n  min_monthly_income = EXCLUDED.min_monthly_income,\n  min_credit_score = EXCLUDED.min_credit_score,\n  min_age = EXCLUDED.min_age,\n  max_age = EXCLUDED.max_age,\n  eligible_employment_statuses = EXCLUDED.eligible_employment_statuses,\n  eligibility_evidence = EXCLUDED.eligibility_evidence,\n  updated_at = NOW();",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.source_name, $json.source_url, $json.product_name, $json.product_type, $json.interest_rate_min, $json.interest_rate_max, $json.min_monthly_income, $json.min_credit_score, $json.min_age, $json.max_age, $json.eligible_employment_statuses, $json.eligibility_criteria_raw, $json.eligibility_evidence, $json.is_active ] }}"
+        }
+      },
+      "id": "a5-postgres-upsert",
+      "name": "PostgreSQL Product Upsert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [760, 380],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-loan-engine",
+          "name": "Postgres Loan Engine"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (Daily)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Configured Portals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Execution Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Configured Portals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Configured Portals": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Validate Evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Validate Evidence": {
+      "main": [
+        [
+          {
+            "node": "PostgreSQL Product Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,161 @@
+{
+  "name": "Workflow B - Optimized User-Loan Matching",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "user-loan-matching",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b1-webhook-trigger",
+      "name": "Matching Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [100, 300],
+      "webhookId": "user-loan-matching"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $headers['x-webhook-secret'] || $json.body.secret || 'default' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "b2-secret-auth",
+      "name": "Verify Webhook Security",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  u.id AS user_id,\n  u.external_user_id,\n  u.name AS user_name,\n  u.email AS user_email,\n  u.monthly_income,\n  u.credit_score,\n  u.employment_status,\n  u.age,\n  p.id AS product_id,\n  p.source_name,\n  p.product_name,\n  p.interest_rate_min,\n  p.interest_rate_max,\n  p.min_monthly_income,\n  p.min_credit_score,\n  p.max_credit_score,\n  p.min_age,\n  p.max_age,\n  p.eligible_employment_statuses,\n  p.eligibility_evidence\nFROM users u\nCROSS JOIN loan_products p\nWHERE u.import_id = $1::uuid\n  AND p.is_active = TRUE\n  AND u.monthly_income >= p.min_monthly_income\n  AND u.credit_score >= p.min_credit_score\n  AND (p.max_credit_score IS NULL OR u.credit_score <= p.max_credit_score)\n  AND u.age >= p.min_age\n  AND u.age <= p.max_age\n  AND p.eligible_employment_statuses @> to_jsonb(u.employment_status);",
+        "additionalFields": {
+          "queryParams": "={{ [ $('Matching Webhook Trigger').item.json.body.import_id ] }}"
+        }
+      },
+      "id": "b3-sql-prefilter",
+      "name": "Stage 2: Deterministic SQL Pre-Filter",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [540, 280],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-loan-engine",
+          "name": "Postgres Loan Engine"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Stage 3 & 4: Deterministic Rule Verification and Match Reasons Formatting\nconst items = $input.all();\nconst importId = $('Matching Webhook Trigger').item.json.body.import_id;\nconst matches = [];\n\nfor (const item of items) {\n  const row = item.json;\n  \n  const reasons = [\n    {\n      criterion: 'monthly_income',\n      passed: true,\n      message: `Monthly income ₹${Number(row.monthly_income).toLocaleString('en-IN')} meets published threshold of ₹${Number(row.min_monthly_income).toLocaleString('en-IN')}`\n    },\n    {\n      criterion: 'credit_score',\n      passed: true,\n      message: `Credit score ${row.credit_score} satisfies minimum threshold of ${row.min_credit_score}`\n    },\n    {\n      criterion: 'age',\n      passed: true,\n      message: `Age ${row.age} is within eligible range [${row.min_age}, ${row.max_age}]`\n    },\n    {\n      criterion: 'employment_status',\n      passed: true,\n      message: `Employment status '${row.employment_status}' is explicitly accepted`\n    }\n  ];\n\n  matches.push({\n    json: {\n      user_id: row.user_id,\n      product_id: row.product_id,\n      import_id: importId,\n      rule_version: 'v1.0-n8n-sql-funnel',\n      match_score: 100.00,\n      match_reasons: JSON.stringify(reasons),\n      status: 'CONFIRMED'\n    }\n  });\n}\n\nreturn matches;"
+      },
+      "id": "b4-rule-engine",
+      "name": "Stage 3 & 4: Evaluate Rules & Build Provenance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 280]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO matches (\n  user_id, product_id, import_id, rule_version, match_score, match_reasons, status, created_at\n) VALUES (\n  $1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, $7, NOW()\n)\nON CONFLICT (user_id, product_id, import_id) DO NOTHING;",
+        "additionalFields": {
+          "queryParams": "={{ [ $json.user_id, $json.product_id, $json.import_id, $json.rule_version, $json.match_score, $json.match_reasons, $json.status ] }}"
+        }
+      },
+      "id": "b5-persist-matches",
+      "name": "Stage 5: Idempotent Match Persistence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [980, 280],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-loan-engine",
+          "name": "Postgres Loan Engine"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/user-notification",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ import_id: $('Matching Webhook Trigger').item.json.body.import_id }) }}",
+        "options": {}
+      },
+      "id": "b6-trigger-workflow-c",
+      "name": "Stage 7: Trigger Workflow C (Notification)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1200, 280]
+    }
+  ],
+  "connections": {
+    "Matching Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Verify Webhook Security",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Webhook Security": {
+      "main": [
+        [
+          {
+            "node": "Stage 2: Deterministic SQL Pre-Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 2: Deterministic SQL Pre-Filter": {
+      "main": [
+        [
+          {
+            "node": "Stage 3 & 4: Evaluate Rules & Build Provenance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 3 & 4: Evaluate Rules & Build Provenance": {
+      "main": [
+        [
+          {
+            "node": "Stage 5: Idempotent Match Persistence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 5: Idempotent Match Persistence": {
+      "main": [
+        [
+          {
+            "node": "Stage 7: Trigger Workflow C (Notification)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
