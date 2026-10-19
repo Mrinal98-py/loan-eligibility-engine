@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loan Eligibility Engine | Automated Ingestion & Matching</title>
+    <meta name="description" content="High-performance, event-driven personal loan eligibility engine with automated discovery and PostgreSQL pre-filtering.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Top Navigation Bar -->
+        <header class="navbar">
+            <div class="brand">
+                <div class="logo-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>Loan Eligibility Engine</h1>
+                    <div class="brand-meta">
+                        <span class="badge live-badge">v1.0 Serverless</span>
+                        <span class="delivery-pill">Mode: <strong>TEST INBOX ONLY</strong></span>
+                    </div>
+                </div>
+            </div>
+            <div class="nav-controls">
+                <button id="btnDiscoverProducts" class="btn btn-secondary" title="View discovered bank loan offers">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    Discover Bank Offers
+                </button>
+                <a href="https://github.com/Mrinal98-py/loan-eligibility-engine" target="_blank" rel="noopener noreferrer" class="nav-link-btn" title="View source repository on GitHub">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                    </svg>
+                    GitHub
+                </a>
+            </div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <main class="content-container">
+            <!-- Left Column: Bulk Upload & Schema Info -->
+            <section class="card upload-card">
+                <div class="card-header">
+                    <h2>Bulk User CSV Ingestion</h2>
+                    <p class="subtitle">Streamlined direct-to-S3 event-driven architecture with row-level validation.</p>
+                </div>
+
+                <!-- Dropzone / File Picker -->
+                <div id="dropZone" class="dropzone">
+                    <input type="file" id="csvFileInput" accept=".csv" class="file-input-hidden">
+                    <div class="dropzone-content">
+                        <div class="upload-icon-wrapper">
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="17 8 12 3 7 8"/>
+                                <line x1="12" y1="3" x2="12" y2="15"/>
+                            </svg>
+                        </div>
+                        <p class="drop-text">Drag & drop applicants CSV here, or <span class="browse-link">browse</span></p>
+                        <p class="file-limits">Supports UTF-8 CSV up to 100 MB &bull; Strict validation</p>
+                        <div class="quick-load-hint">
+                            Want to test quickly?
+                            <button type="button" id="btnQuickSample" class="btn-inline-sample">Load 10,000 Row Benchmark CSV</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Selected File Display -->
+                <div id="selectedFileContainer" class="selected-file-box hidden">
+                    <div class="file-details">
+                        <span class="file-icon">&#128196;</span>
+                        <div class="file-meta">
+                            <span id="selectedFileName" class="file-name">filename.csv</span>
+                            <span id="selectedFileSize" class="file-size">0 KB</span>
+                        </div>
+                    </div>
+                    <button id="btnRemoveFile" class="btn-icon" title="Remove file">&times;</button>
+                </div>
+
+                <!-- Upload Action & Progress -->
+                <div class="upload-actions">
+                    <button id="btnUpload" class="btn btn-primary" disabled>
+                        <span>Start Ingestion & Matching</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                            <polyline points="12 5 19 12 12 19"></polyline>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Progress Bar -->
+                <div id="progressWrapper" class="progress-wrapper hidden">
+                    <div class="progress-bar-bg">
+                        <div id="progressBar" class="progress-bar-fill" style="width: 0%;"></div>
+                    </div>
+                    <span id="progressLabel" class="progress-label">Uploading to S3 (0%)...</span>
+                </div>
+
+                <!-- Supported Columns Reference -->
+                <div class="schema-info-box">
+                    <div class="schema-title">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        <span>Supported CSV Columns (Strict Sanitization)</span>
+                    </div>
+                    <div class="schema-tags">
+                        <code>user_id</code>
+                        <code>name</code>
+                        <code>email</code>
+                        <code>monthly_income</code>
+                        <code>credit_score</code>
+                        <code>employment_status</code>
+                        <code>age</code>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Column: Status & Realtime Pipeline Funnel -->
+            <section class="card status-card">
+                <div class="card-header">
+                    <h2>Pipeline Observability</h2>
+                    <p class="subtitle">Real-time status tracking across Ingestion, SQL Pre-filter, and Notifications.</p>
+                </div>
+
+                <!-- Empty State -->
+                <div id="emptyStatusState" class="empty-state">
+                    <div class="empty-icon">&#9881;</div>
+                    <p>No active import. Upload a CSV file or load the benchmark dataset to observe real-time pipeline execution.</p>
+                    <button id="btnLoadSample" class="btn btn-outline">Load 10,000 Row Benchmark CSV</button>
+                </div>
+
+                <!-- Active Import View -->
+                <div id="activeImportView" class="active-import-view hidden">
+                    <!-- Import Header -->
+                    <div class="import-id-bar">
+                        <div>
+                            <span class="label">IMPORT ID</span>
+                            <span id="displayImportId" class="mono-id">--</span>
+                        </div>
+                        <div id="statusBadge" class="status-pill status-created">CREATED</div>
+                    </div>
+
+                    <!-- Metrics Stats Grid -->
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <span class="stat-number" id="statTotalRows">0</span>
+                            <span class="stat-label">Total Rows</span>
+                        </div>
+                        <div class="stat-box success">
+                            <span class="stat-number" id="statAcceptedRows">0</span>
+                            <span class="stat-label">Accepted</span>
+                        </div>
+                        <div class="stat-box danger">
+                            <span class="stat-number" id="statRejectedRows">0</span>
+                            <span class="stat-label">Rejected</span>
+                        </div>
+                        <div class="stat-box highlight">
+                            <span class="stat-number" id="statMatchesFound">0</span>
+                            <span class="stat-label">Matches</span>
+                        </div>
+                    </div>
+
+                    <!-- Pipeline Stages Progression -->
+                    <div class="pipeline-flow">
+                        <div class="stage-step" id="stageUpload">
+                            <div class="step-circle">&#10003;</div>
+                            <span class="step-label">1. S3 Upload</span>
+                        </div>
+                        <div class="flow-line"></div>
+                        <div class="stage-step" id="stageIngest">
+                            <div class="step-circle">2</div>
+                            <span class="step-label">2. Ingest</span>
+                        </div>
+                        <div class="flow-line"></div>
+                        <div class="stage-step" id="stageMatching">
+                            <div class="step-circle">3</div>
+                            <span class="step-label">3. SQL Filter</span>
+                        </div>
+                        <div class="flow-line"></div>
+                        <div class="stage-step" id="stageNotify">
+                            <div class="step-circle">4</div>
+                            <span class="step-label">4. Test SES</span>
+                        </div>
+                    </div>
+
+                    <!-- Optimization Funnel Stats Box -->
+                    <div id="funnelMetricsBox" class="funnel-box hidden">
+                        <div class="funnel-header">
+                            <h4>Optimization Treasure Hunt Funnel</h4>
+                            <span class="funnel-badge" id="funnelReductionPct">0% Candidate Reduction</span>
+                        </div>
+                        <div class="funnel-stats-row">
+                            <div>Theoretical Pairs: <strong id="funnelTheoretical">0</strong></div>
+                            <div>PostgreSQL Pre-filtered: <strong id="funnelFiltered">0</strong></div>
+                            <div>LLM Calls Avoided: <strong id="funnelAvoided">0</strong></div>
+                        </div>
+                    </div>
+
+                    <!-- Confirmed Matches Table -->
+                    <div class="matches-table-wrapper">
+                        <div class="matches-table-header">
+                            <h4>Confirmed Indicative Matches</h4>
+                            <input type="text" id="tableFilterInput" class="table-filter-input" placeholder="Filter by product/bank...">
+                        </div>
+                        <div class="table-scroll">
+                            <table class="data-table" id="matchesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Product Name</th>
+                                        <th>Bank / Source</th>
+                                        <th>Rate Range</th>
+                                        <th>Criteria Met</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="matchesTableBody">
+                                    <tr>
+                                        <td colspan="4" class="empty-table-row">No matches recorded yet.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Discovered Loan Products Modal -->
+        <div id="productsModal" class="modal-backdrop hidden">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>Discovered Bank Loan Products (Workflow A)</h3>
+                    <button id="btnCloseModal" class="btn-icon" title="Close modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="subtitle">Personal loan products extracted with verbatim provenance from public banking portals:</p>
+                    <div class="products-grid" id="productsModalGrid">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notification Toast Container -->
+        <div id="toastContainer" class="toast-container"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
