@@ -1,0 +1,49 @@
+graph TD
+    classDef client fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef aws fill:#0f172a,stroke:#f59e0b,stroke-width:2px,color:#f8fafc;
+    classDef db fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef n8n fill:#0f172a,stroke:#8b5cf6,stroke-width:2px,color:#f8fafc;
+    classDef secure fill:#0f172a,stroke:#ef4444,stroke-width:2px,color:#f8fafc;
+
+    UI["Upload Web UI<br/>(Vanilla HTML/CSS/JS)"]:::client
+    APIGW["Amazon API Gateway<br/>(POST /api/uploads, GET /api/imports)"]:::aws
+    CreateUploadLambda["Lambda: createUpload<br/>(Generates S3 Presigned URL)"]:::aws
+    S3["Amazon S3 Bucket<br/>(Private AES-256 CSV Store)"]:::aws
+    
+    DispatchLambda["Lambda: ingestionDispatch<br/>(S3 ObjectCreated Event)"]:::aws
+    SQS["Amazon SQS Queue<br/>(LoanIngestionQueue)"]:::aws
+    DLQ["Amazon SQS DLQ<br/>(LoanIngestionDLQ)"]:::secure
+    
+    WorkerLambda["Lambda: processCsvWorker<br/>(Streaming CSV Parser & Batcher)"]:::aws
+    RDS[("Amazon RDS PostgreSQL 16<br/>users, imports, loan_products,<br/>matches, notifications")]:::db
+
+    WFA["Workflow A: Loan Discovery<br/>(Daily Schedule -> Crawl -> Provenance -> Upsert)"]:::n8n
+    WFB["Workflow B: Optimized Matching Funnel<br/>(Webhook -> SQL Pre-filter -> Rules -> Persist)"]:::n8n
+    WFC["Workflow C: Safe Notification<br/>(Strict Test Override -> Amazon SES)"]:::n8n
+    TestInbox["Controlled Test Inbox<br/>(developer-test-inbox@example.com)"]:::secure
+
+    %% Connections
+    UI -->|1. Request Presigned URL| APIGW
+    APIGW --> CreateUploadLambda
+    CreateUploadLambda -->|Store import ID| RDS
+    CreateUploadLambda -->|Return Presigned PUT URL| UI
+    
+    UI -->|2. Direct Binary PUT Upload| S3
+    S3 -->|3. s3:ObjectCreated:*| DispatchLambda
+    DispatchLambda -->|4. Enqueue Job| SQS
+    SQS -.->|MaxRetries=3 Failure| DLQ
+    SQS -->|5. Trigger Batch Stream| WorkerLambda
+    
+    WorkerLambda -->|6. Stream Rows & Validate| WorkerLambda
+    WorkerLambda -->|7. Batch Insert Users & Rejections| RDS
+    WorkerLambda -->|8. Trigger Matching Webhook| WFB
+    
+    WFA -->|Scheduled Crawl & Provenance| RDS
+    WFB -->|Execute Indexed SQL Pre-filter| RDS
+    WFB -->|Persist Confirmed Matches| RDS
+    WFB -->|Invoke Notification Pipeline| WFC
+    
+    WFC -->|Query Eligible Matches| RDS
+    WFC -->|Hardware Test Override| WFC
+    WFC -->|Dispatch Email via Amazon SES| TestInbox
+    WFC -->|Audit Delivery Record| RDS

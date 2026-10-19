@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3UploadBucketAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::loan-eligibility-uploads-*/*"
+    },
+    {
+      "Sid": "SQSIngestionQueueAccess",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": [
+        "arn:aws:sqs:*:*:loan-ingestion-queue-*",
+        "arn:aws:sqs:*:*:loan-ingestion-dlq-*"
+      ]
+    },
+    {
+      "Sid": "SESEmailDispatchAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail",
+        "ses:SendRawEmail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogsAccess",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}

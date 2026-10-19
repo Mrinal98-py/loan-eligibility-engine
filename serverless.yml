@@ -1,0 +1,147 @@
+service: loan-eligibility-engine
+
+frameworkVersion: '>=3.38.0 <5.0.0'
+
+provider:
+  name: aws
+  runtime: python3.12
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  memorySize: 512
+  timeout: 30
+  tracing:
+    lambda: true
+    apiGateway: true
+  environment:
+    ENVIRONMENT: ${self:provider.stage}
+    DATABASE_URL: ${ssm:/loan-engine/${self:provider.stage}/database-url}
+    S3_BUCKET_NAME: ${self:custom.uploadBucketName}
+    SQS_QUEUE_URL: { Ref: LoanIngestionQueue }
+    SQS_DLQ_URL: { Ref: LoanIngestionDLQ }
+    DELIVERY_MODE: ${env:DELIVERY_MODE, 'test'}
+    ALLOW_REAL_RECIPIENTS: 'false'
+    TEST_EMAIL_RECIPIENTS: ${env:TEST_EMAIL_RECIPIENTS, 'developer-test-inbox@example.com'}
+    SES_FROM_EMAIL: ${env:SES_FROM_EMAIL, 'notifications@verified-domain.com'}
+    WEBHOOK_SECRET: ${ssm:/loan-engine/${self:provider.stage}/webhook-secret}
+
+  iam:
+    role:
+      statements:
+        # Least privilege S3 access for uploads bucket
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:AbortMultipartUpload
+          Resource:
+            - "arn:aws:s3:::${self:custom.uploadBucketName}/*"
+        # SQS Queue publish and receive permissions
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - Fn::GetAtt: [ LoanIngestionQueue, Arn ]
+            - Fn::GetAtt: [ LoanIngestionDLQ, Arn ]
+        # Amazon SES send permission strictly scoped
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+
+custom:
+  uploadBucketName: loan-eligibility-uploads-${self:provider.stage}-${aws:accountId}
+
+functions:
+  # 1. API: Request presigned S3 upload URL
+  createUpload:
+    handler: backend/lambda_handlers/create_upload.handler
+    description: Generates short-lived presigned S3 PUT URL for direct bulk CSV upload
+    events:
+      - http:
+          path: /api/uploads
+          method: post
+          cors: true
+
+  # 2. API: Check import status and row acceptance metrics
+  importStatus:
+    handler: backend/lambda_handlers/import_status.handler
+    description: Returns live ingestion, matching, and notification progression
+    events:
+      - http:
+          path: /api/imports/{import_id}
+          method: get
+          cors: true
+
+  # 3. Dispatcher: S3 ObjectCreated event routes to Amazon SQS
+  ingestionDispatch:
+    handler: backend/lambda_handlers/ingestion_dispatch.handler
+    description: Enqueues S3 ObjectCreated events into SQS
+    events:
+      - s3:
+          bucket: ${self:custom.uploadBucketName}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: uploads/
+            - suffix: .csv
+          existing: false
+
+  # 4. Asynchronous Ingestion Worker: Processes SQS messages and streams CSV to PostgreSQL
+  processCsvWorker:
+    handler: backend/lambda_handlers/process_csv.handler
+    memorySize: 1024
+    timeout: 300
+    reservedConcurrency: 5
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [ LoanIngestionQueue, Arn ]
+          batchSize: 1
+          maximumBatchingWindow: 10
+
+resources:
+  Resources:
+    # Amazon SQS Dead Letter Queue
+    LoanIngestionDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: loan-ingestion-dlq-${self:provider.stage}
+        MessageRetentionPeriod: 1209600 # 14 days
+
+    # Amazon SQS Main Ingestion Queue with DLQ Redrive Policy
+    LoanIngestionQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: loan-ingestion-queue-${self:provider.stage}
+        VisibilityTimeout: 360
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt: [ LoanIngestionDLQ, Arn ]
+          maxReceiveCount: 3
+
+    # Private S3 Bucket with AES256 Server-Side Encryption
+    UploadBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.uploadBucketName}
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        LifecycleConfiguration:
+          Rules:
+            - Id: AbortIncompleteMultipartUploads
+              Status: Enabled
+              AbortIncompleteMultipartUpload:
+                DaysAfterInitiation: 7
+            - Id: ExpireProcessedUploadsAfter30Days
+              Status: Enabled
+              ExpirationInDays: 30
