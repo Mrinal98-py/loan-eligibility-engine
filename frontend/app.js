@@ -278,7 +278,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td><strong>${m.product_name}</strong></td>
                         <td>${m.source_name}</td>
                         <td>${m.interest_rate_min ? m.interest_rate_min + '% - ' + m.interest_rate_max + '%' : 'Market rates'}</td>
-                        <td style="color: #34d399;">&#10003; All criteria met (${m.match_reasons.length} checks)</td>
+                        <td class="match-pass">&#10003; All criteria met (${m.match_reasons.length} checks)</td>
                     </tr>
                 `).join("");
 
